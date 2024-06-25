@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        // WebRTC JavaScript for handling signaling and data channel
+        class SignalingChannel {
+            constructor(senderUsername, recipientUsername) {
+                this.senderUsername = senderUsername;
+                this.recipientUsername = recipientUsername;
+                const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                const wsUrl = `${wsScheme}://${window.location.host}/chat/${recipientUsername}/${senderUsername}/`;
+                this.socket = new WebSocket(wsUrl); // Initialize WebSocket
+
+                this.socket.onmessage = (event) => {
+                    const message = JSON.parse(event.data);
+                    this.onMessage(message);
+                };
+
+                this.socket.onopen = () => {
+                    console.log('WebSocket connection opened');
+                };
+
+                this.socket.onclose = () => {
+                    console.log('WebSocket connection closed');
+                };
+
+                this.socket.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                };
+            }
+
+            onMessage(message) {
+                const event = new CustomEvent('message', { detail: message });
+                document.dispatchEvent(event);
+            }
+
+            send(message) {
+                this.socket.send(JSON.stringify(message));
+            }
+        }
+
+        // Usage example (replace with your authentication logic)
+        async function handleCall(isInitiator, senderUsername, recipientUsername) {
+            const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            const peerConnection = new RTCPeerConnection(configuration);
+            const signalingChannel = new SignalingChannel(senderUsername, recipientUsername); // Pass necessary parameters
+
+            signalingChannel.addEventListener('message', async (event) => {
+                const message = event.detail;
+
+                if (message.offer) {
+                    const remoteDesc = new RTCSessionDescription(message.offer);
+                    await peerConnection.setRemoteDescription(remoteDesc);
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    signalingChannel.send({ answer: answer });
+                } else if (message.answer) {
+                    const remoteDesc = new RTCSessionDescription(message.answer);
+                    await peerConnection.setRemoteDescription(remoteDesc);
+                } else if (message.iceCandidate) {
+                    try {
+                        await peerConnection.addIceCandidate(message.iceCandidate);
+                    } catch (e) {
+                        console.error('Error adding received ice candidate', e);
+                    }
+                }
+            });
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    signalingChannel.send({ iceCandidate: event.candidate });
+                }
+            };
+
+            // Data Channel Setup
+            let dataChannel;
+            if (isInitiator) {
+                dataChannel = peerConnection.createDataChannel('chat');
+                setupDataChannel(dataChannel);
+            } else {
+                peerConnection.ondatachannel = (event) => {
+                    dataChannel = event.channel;
+                    setupDataChannel(dataChannel);
+                };
+            }
+
+            function setupDataChannel(dataChannel) {
+                dataChannel.onmessage = (event) => {
+                    const message = event.data;
+                    $('#chat-messages').append('<p><strong>Peer:</strong> ' + message + '</p>');
+                };
+
+                $('#send-message').click(function() {
+                    const message = $('#chat-message').val().trim();
+                    if (message) {
+                        $('#chat-messages').append('<p><strong>You:</strong> ' + message + '</p>');
+                        dataChannel.send(message);
+                        $('#chat-message').val('');
+                    }
+                });
+            }
+
+            // Sending Side Logic (if isInitiator)
+            if (isInitiator) {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                signalingChannel.send({ offer: offer });
+            }
+        }
+
+        $(document).ready(function() {
+            var urlParams = new URLSearchParams(window.location.search);
+            var username = urlParams.get('username');
+            var name = urlParams.get('name');
+            var email = urlParams.get('email');
+
+            $('#chat-header').text('Chat with ' + username);
+            $('#user-details').html(
+                '<p>Username: ' + username + '</p>' +
+                '<p>Name: ' + name + '</p>' +
+                '<p>Email: ' + email + '</p>'
+            );
+
+            // Call handleCall with appropriate parameters
+            const isInitiator = true; // Set based on your logic
+            const senderUsername = "YOUR_USERNAME"; // Replace with the authenticated user's username
+            const recipientUsername = username; // Use the username from URL params
+
+            handleCall(isInitiator, senderUsername, recipientUsername);
+        });
+    </script>
+    <style>
+        .chat-box {
+            border: 1px solid #000;
+            padding: 10px;
+            width: 300px;
+            height: 400px;
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-header {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 5px;
+            margin-bottom: 10px;
+        }
+        .chat-input {
+            display: flex;
+        }
+        .chat-input input {
+            flex: 1;
+            padding: 5px;
+        }
+        .chat-input button {
+            padding: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-box">
+        <div id="chat-header" class="chat-header"></div>
+        <div id="user-details"></div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <div class="chat-input">
+            <input type="text" id="chat-message" placeholder="Type a message...">
+            <button id="send-message">Send</button>
+        </div>
+    </div>
+</body>
+</html>
+
